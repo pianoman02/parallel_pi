@@ -26,9 +26,9 @@ int main(){
     printf("What should the second number be? (in decimal)\n");
     scanf("%lld", &b);
     // now storing it in an array of size 16 
-    char digitsa[16];
-    char digitsb[16];
-    char digitsc[16];
+    unsigned char digitsa[16];
+    unsigned char digitsb[16];
+    unsigned char digitsc[16];
     // initialising
     for (int i=0; i<16; i++){
         digitsa[i] = 0;
@@ -40,7 +40,7 @@ int main(){
         digitsb[i] = b>>(8*i) & 255;
     }
     // Multiplying
-    int aid=0;
+    unsigned int aid=0;
     int i=0;
     for (int k=0; k<=14; k++){
         for (int j=0; j<=k; j++){
@@ -51,8 +51,8 @@ int main(){
             digitsc[k+1] += aid>>8;
         }
     }
-    for (int k=0; k<= 14; k++){
-        c += ((unsigned long long)digitsc[k])>>(k*8);
+    for (int k=0; k<= 7; k++){
+        c += ((unsigned long long)digitsc[k])<<(k*8);
     }
     printf("The product is\n%lld\n",c);
     return 0;

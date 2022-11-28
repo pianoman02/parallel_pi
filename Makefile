@@ -1,5 +1,5 @@
 CC= bspcc
-CFLAGS= -std=c99 -Wall -O3
+CFLAGS= -std=c99 -Wall -O0 -g
 LFLAGS= -lm
 
 OBJMULT= mult.o bspfft.o bspedupack.o
