@@ -101,6 +101,7 @@ void vecfreei(long *pi){
 
     if (pi!=NULL)
         free(pi);
+    pi = NULL;
 
 } /* end vecfreei */
 

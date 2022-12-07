@@ -1,5 +1,4 @@
  #include<stdio.h>
- #include"bspedupack.h"
 // This program calculates the inproduct sequentially.
 // First, we represent the number using chars.
 #define MAXDIGITS 1000
@@ -14,10 +13,10 @@ int getline (char s[]){
 }
 
 int main(){
-    char s[MAXDIGITS];
+    //char s[MAXDIGITS];
     unsigned long long a=0,b=0,c = 0; // At least 64 bits= 8 bytes
     printf("What should the first number be? (in decimal)\n");
-    int sizea, sizeb;
+    //int sizea, sizeb;
     
     scanf("%lld", &a);
     // First, read 17 digits. Then, convert that to a long long. Take 7 bytes out of that. Then continue.
