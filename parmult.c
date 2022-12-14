@@ -9,27 +9,154 @@ void bspfft(double complex *x, long n, bool forward, double complex *w,
                 long *rho_np, long *rho_p);
 void bspfft_init(long n, double complex *w, long *rho_np, long *rho_p);
 
-void printvariable(double complex *x, char* st,long np){
+void readvariable(double complex *x, char* st, long n, long decimalsPerRadix){
+    /* We assume x has already been registered and has size n/p
+       A bsp_sync is required to actually obtain the variable*/
+    long p = bsp_nprocs();
+    long s = bsp_pid();
+    if (s==0){
+        char xstr[n*decimalsPerRadix+1];
+        int xlen;
+        printf("Enter the number %s, please use at most %ld digits\n",st, n*decimalsPerRadix);
+        scanf("%s",xstr);
+        // TODO: Print an error message if number is to large
+        xlen = strlen(xstr);
+
+        // Converting the numbers to complex doubles.
+        double complex *xstart = vecallocc(n);
+        for (long i=0; i<n; i++){
+            xstart[i] = 0;
+        }
+        long j=xlen-1;
+        for (long i=0; i<n; i++){
+            // TODO: Make more general using decimalsPerRadix
+            if (j == -1)
+                break;
+            xstart[i] = xstr[j]-'0';
+            j--;
+            if (j == -1)
+                break;
+            xstart[i] += 10*(xstr[j]-'0');
+            j--;          
+        }
+        // Now broadcasting the numbers.
+        // TODO: Make this more efficient, by bundeling the numbers in bulk
+        for (long i=0; i<n; i++){
+            bsp_put(i%p,&(xstart[i]),x,(i/p)*sizeof(double complex),sizeof(double complex));
+        }
+        vecfreec(xstart);
+    }
+} /*end readvariable*/
+
+void carry_add_seq(double complex *x, long radix, long n){
+    /*
+       x = the variable to carry_add, stored on only one processor
+       n = size of x
+       radix = the radix with which the number is stored
+    */
+    long carry = 0;
+    long temp = 0;
+    bool firstroundofCarryAddsDone = false;
+    long i=0;
+    while(!(firstroundofCarryAddsDone && carry==0)){
+        temp = lround(creal(x[i]));
+        temp += carry;
+        x[i] = temp % radix;
+        carry = temp / radix;
+        if (i==n-1)
+        {
+            i=0;
+            firstroundofCarryAddsDone = true;
+        }
+        else
+            i++;
+    }
+} /*end carry_add_seq*/
+
+void prettyprinting(double complex *x, char* st, long n, long decimalsPerRadix){
+    /* For prettyprinting, all numbers are brought back to processor 0
+       Therefore, it is slow, but good for final output.
+
+       x = the variable to print, distributed in cyclic distribution over the processors
+       n = size of x
+       st = name of x to be printed
+       decimalsPerRadix = which power of 10 the radix is. Ex: if the radix is 100, we have decimalsPerRadix = 2*/
+    long p = bsp_nprocs();
+    long np = n/p;
+    long s = bsp_pid();
+
+    double complex *x0 = NULL;
+    if (s==0){
+        x0 = vecallocc(n);
+        bsp_push_reg(x0,n*sizeof(long double));
+    }
+    else
+        bsp_push_reg(&x0,0);
+
+    ///////////////////////
+    bsp_sync();
+    ///////////////////////
+
+    if (s==0){
+        for (long i=0; i<np;i++)
+            x0[i*p] = x[i];
+    }
+    else{
+        for (long i=0; i<np; i++)
+            bsp_put(0,&(x[i]),&x0,(s+i*p)*sizeof(double complex), sizeof(double complex));
+    }
+    ///////////////////////
+    bsp_sync();
+    ///////////////////////
+
+    if (s==0){
+        carry_add_seq(x0,100,n);
+        // Handeling the rollovers
+        char xystr[n*decimalsPerRadix+1];
+        xystr[n*decimalsPerRadix] = '\0';
+        long val = 0;
+        for (long i=0; i<n; i++){
+            val = lround(creal(x0[i]));
+            xystr[decimalsPerRadix*n-1-decimalsPerRadix*i] = ((char)val%10)+'0';
+            xystr[decimalsPerRadix*n-2-decimalsPerRadix*i] = ((char)val/10)+'0';
+        }
+        printf("%s = %s\n",st,xystr);
+
+        bsp_pop_reg(x0);
+        vecfreec(x0);
+    }
+    else
+        bsp_pop_reg(&x0);
+    fflush(stdout);
+} /*end prettyprinting*/
+
+void printvariable(double complex *x, char* st,long n){
     /* This function is used for debugging reasons */
+    long np = n/bsp_nprocs();
     long s = bsp_pid();
     for (long i=0; i<np; i++){
         printf("In %ld index %ld the value of %s is %lf + %lf i\n",s,i,st,creal(x[i]),cimag(x[i]));
     }
 }  /*end printvariable*/
 
-void multiply(double complex *x, double complex *y,long n, double complex *w){
+void multiply(double complex *x, double complex *y,long n, double complex *w, long*rho_np, long*rho_p){
     /* Mulitplies two numbers x and y, which are stored in cyclic radix fasion.
+       The result is stored in x.
        It is assumed that there are enough zeros in both x and y,
        (for now, at least n/2 zeros in both x and y)
        such that the multiplication doesn't cause any cyclic overflow
        
        x and y must have been registered before calling this function.
        Moreover, the weights w have to be initialised using bspfft_init*/
-    
+    long np = n/bsp_nprocs();
+    bspfft(x,n,true,w,rho_np,rho_p);
+    bspfft(y,n,true,w,rho_np,rho_p);
 
-
+    for (int i=0; i<np; i++){
+        x[i] *= y[i];
+    }
+    bspfft(x,n,false,w,rho_np,rho_p);
 } /*end multiply*/
-
 
 void carry_add(double complex *x, long *x_carry, long n){
     /* Performs one carry-add operation on the number x
@@ -45,7 +172,9 @@ void carry_add(double complex *x, long *x_carry, long n){
         x_carry[i] = x_carry[i]/100;
     }
     bsp_put((s+1)%p,x_carry, x_carry,0,np*sizeof(long));
+    //////////////////////////////
     bsp_sync();
+    //////////////////////////////
     for (long i=0; i<np; i++){
         x[i] += x_carry[i];
     }
@@ -55,167 +184,73 @@ void carry_add(double complex *x, long *x_carry, long n){
 void run(){
     bsp_begin(P);
     long p= bsp_nprocs();
-    long s= bsp_pid();
     long n = 8;
     long decimalsPerRadix = 2;
     long np = n/p;
     // NOTE: We assume that p devides n
 
-    /* Determine the number of computation supersteps, by computing
-       the smallest integer t such that (n/p)^t >= p */
-    long t= 0;
-    for (long c=1; c<p; c *= np)
-        t++;
-
-    /* Allocate, register,  and initialize vectors */
-    double complex *w= vecallocc((t+1)*np);
+    // Allocate, register, and initialize vectors 
     double complex *x= vecallocc(np);
-    long *x_carry = vecalloci(np);
     double complex *y= vecallocc(np);
-    long *y_carry = vecalloci(np);
-    bsp_push_reg(x,np*sizeof(double complex));
-    bsp_push_reg(y,np*sizeof(double complex));
-    bsp_push_reg(x_carry, np*sizeof(long));
-    bsp_push_reg(y_carry, np*sizeof(long));
-    long *rho_np= vecalloci(np);
-    long *rho_p=  vecalloci(p);
-
     for (long j=0; j<np; j++){
         x[j]= 0;
         y[j]= 0;
     }
+    bsp_push_reg(x,np*sizeof(double complex));
+    bsp_push_reg(y,np*sizeof(double complex));
+    
+    // Allocate space for the carry-adds
+    long *x_carry = vecalloci(np);
+    long *y_carry = vecalloci(np);
+    bsp_push_reg(x_carry, np*sizeof(long));
+    bsp_push_reg(y_carry, np*sizeof(long));
 
-    double complex *xstart = NULL;
-
-    bsp_sync();
-
-    if (s==0){
-        // Reading the numbers
-        char xstr[n*decimalsPerRadix/2+1], ystr[n*decimalsPerRadix/2+1];
-        int xlen, ylen;
-        printf("For the numbers, please use at most %ld digits\n",n*decimalsPerRadix/2);
-        printf("Please enter the number x: \n");
-        scanf("%s",xstr);
-        printf("Please enter the number y: \n");
-        scanf("%s",ystr);
-        // TODO: Print an error message if number is to large
-        xlen = strlen(xstr);
-        ylen = strlen(ystr);
-//        printf("x= %s\n",xstr);
-//        printf("y= %s\n",ystr);
-
-        // Converting the numbers to complex doubles.
-        xstart = vecallocc(n); // because the x is also used for the return 
-        bsp_push_reg(xstart,n*sizeof(double complex));
-        double complex *ystart = vecallocc(n/2);
-        for (long i=0; i<n; i++){
-            xstart[i] = 0;
-        }
-        for (long i=0; i<n/2; i++){
-            ystart[i] = 0;
-        }
-        long j=xlen-1;
-        for (long i=0; i<n/2; i++){
-            // TODO: Make more general using decimalsPerRadix
-            if (j == -1)
-                break;
-            xstart[i] = xstr[j]-'0';
-            j--;
-            if (j == -1)
-                break;
-            xstart[i] += 10*(xstr[j]-'0');
-            j--;          
-        }
-//        for (long i=0; i<n/2; i++)
-//            printf("the %ld number is %lf\n",i,creal(xstart[i]));
-        j=ylen-1;
-        for (long i=0; i<n/2; i++){
-            // TODO: Make more general using decimalsPerRadix
-            if (j == -1)
-                break;
-            ystart[i] = ystr[j]-'0';
-            j--;
-            if (j == -1)
-                break;
-            ystart[i] += 10*(ystr[j]-'0');   
-            j--;         
-        }
-//        for (long i=0; i<n/2; i++)
-//            printf("the %ld number is %lf\n",i,creal(ystart[i]));
-
-        // Now broadcasting the numbers.
-        // TODO: Make this more efficient, by bundeling the numbers in bulk
-        for (long i=0; i<n/2; i++){
-            bsp_put(i%p,&(xstart[i]),x,(i/p)*sizeof(double complex),sizeof(double complex));
-            bsp_put(i%p,&(ystart[i]),y,(i/p)*sizeof(double complex),sizeof(double complex));
-        }
-    }
-    bsp_push_reg(xstart,n*sizeof(double complex));
-    bsp_sync();
-//    for (long i=0; i<np; i++){
-//        printf("In %ld index %ld the value of x is %lf\n",s,i,creal(x[i]));
-//    }
-
-    /* Initialize the weight and bit reversal tables */
+    // Initialize the weight and bit reversal tables
+    /* First, determine the number of computation supersteps, by computing
+       the smallest integer t such that (n/p)^t >= p */
+    long t= 0;
+    for (long c=1; c<p; c *= np)
+        t++;
+    double complex *w= vecallocc((t+1)*np);
+    long *rho_np= vecalloci(np);
+    long *rho_p=  vecalloci(p);
     bspfft_init(n,w,rho_np,rho_p);
+
+    /////////////////////////
     bsp_sync();
+    /////////////////////////
+
+    readvariable(x,"x",n,decimalsPerRadix);
+    readvariable(y,"y",n,decimalsPerRadix);
+
+    /////////////////////////
+    bsp_sync();
+    /////////////////////////
   
-    /* Perform the FFTs */
-    bspfft(x,n,true,w,rho_np,rho_p);
-    bspfft(y,n,true,w,rho_np,rho_p);
-
-    for (long i=0; i<np; i++){
-        printf("In %ld index %ld the value of x is %lf + %lf i\n",s,i,creal(x[i]),cimag(x[i]));
-    }
-    for (long i=0; i<np; i++){
-        printf("In %ld index %ld the value of y is %lf + %lf i\n",s,i,creal(y[i]),cimag(y[i]));
-    }
-
-    for (int i=0; i<np; i++){
-        x[i] *= y[i];
-    }
-    for (long i=0; i<np; i++){
-        printf("In %ld index %ld the value of x2 is %lf + %lf i\n",s,i,creal(x[i]),cimag(x[i]));
-    }
-    bspfft(x,n,false,w,rho_np,rho_p);
+    multiply(x,y,n,w,rho_np,rho_p);
     carry_add(x,x_carry,n);
-    // Now, perform rounding and carry-adds.
     
-    for (long i=0; i<np; i++){
-        printf("In %ld index %ld the value of x is %lf\n",s,i,creal(x[i]));
-    }
-    
-    /////////////// Now, bring all the numbers back to processor 0 to print them.
-    // TODO: Make communication more efficient
-    for (long i=0; i<np; i++)
-        bsp_put(0,&(x[i]),xstart,(s+i*p)*sizeof(double complex), sizeof(double complex));
+    prettyprinting(x,"x*y",n,decimalsPerRadix);
+
+    /////////////////////////
     bsp_sync();
-    if (s==0){
-        // Handeling the rollovers
-        char xystr[n*decimalsPerRadix+1];
-        xystr[n*decimalsPerRadix] = '\0';
-        printf("The product is\n");
-        printf("%s",xystr);
-        bsp_pop_reg(xstart);
-        vecfreec(xstart);
-        xstart=NULL;
-    }
-    
-    fflush(stdout);
-    bsp_sync();
+    /////////////////////////
 
     bsp_pop_reg(x);
     bsp_pop_reg(y);
     bsp_pop_reg(x_carry);
     bsp_pop_reg(y_carry);
-    bsp_sync();
 
-    vecfreei(rho_p);
-    vecfreei(rho_np);
+    /////////////////////////
+    bsp_sync();
+    /////////////////////////
+
     vecfreec(x);
     vecfreec(y);
     vecfreei(x_carry);
     vecfreei(y_carry);
+    vecfreei(rho_p);
+    vecfreei(rho_np);
     vecfreec(w);
 
     bsp_end();

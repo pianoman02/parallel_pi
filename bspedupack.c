@@ -110,6 +110,7 @@ void vecfreeb(bool *pb){
 
     if (pb!=NULL)
         free(pb);
+    pb = NULL;
 
 } /* end vecfreeb */
 
@@ -118,6 +119,7 @@ void vecfreed(double *pd){
 
     if (pd!=NULL)
         free(pd);
+    pd = NULL;
 
 } /* end vecfreed */
 
@@ -126,6 +128,7 @@ void vecfreec(double complex *pc){
     
     if (pc!=NULL)
         free(pc);
+    pc = NULL;
         
 } /* end vecfreec */
 
@@ -134,6 +137,7 @@ void vecfreeitem(Item *pitem){
 
     if (pitem!=NULL)
         free(pitem);
+    pitem = NULL;
 
 } /* end vecfreeitem */
 
@@ -146,5 +150,6 @@ void matfreed(double **ppd){
             free(ppd[0]);
         free(ppd);
     }
+    ppd = NULL;
 
 } /* end matfreed */
