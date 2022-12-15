@@ -166,10 +166,22 @@ void carry_add(double complex *x, long *x_carry, long n){
     long p = bsp_nprocs();
     long s = bsp_pid();
     long np = n/p;
-    for (long i=0; i<np; i++){
-        x_carry[i] = lround(creal(x[i]));
-        x[i] = x_carry[i]%100;
-        x_carry[i] = x_carry[i]/100;
+    if (s!= p-1){
+        for (long i=0; i<np; i++){
+            x_carry[i] = lround(creal(x[i]));
+            x[i] = x_carry[i]%100;
+            x_carry[i] = x_carry[i]/100;
+        }
+    }
+    else{
+        for (long i=1; i<np; i++){
+            x_carry[i] = lround(creal(x[i-1]));
+            x[i-1] = x_carry[i]%100;
+            x_carry[i] = x_carry[i]/100;
+        }
+        x_carry[0] = lround(creal(x[np-1]));
+        x[np-1] = x_carry[0]%100;
+        x_carry[0] = x_carry[0]/100;
     }
     bsp_put((s+1)%p,x_carry, x_carry,0,np*sizeof(long));
     //////////////////////////////
@@ -184,7 +196,7 @@ void carry_add(double complex *x, long *x_carry, long n){
 void run(){
     bsp_begin(P);
     long p= bsp_nprocs();
-    long n = 8;
+    long n = 256; // NOTE: n should be a power of two, as well as p
     long decimalsPerRadix = 2;
     long np = n/p;
     // NOTE: We assume that p devides n
@@ -226,10 +238,14 @@ void run(){
     /////////////////////////
     bsp_sync();
     /////////////////////////
-  
+    printvariable(x, "x",n);
+    printvariable(y, "y",n);
     multiply(x,y,n,w,rho_np,rho_p);
+    printvariable(x, "bef x*y",n);
     carry_add(x,x_carry,n);
-    
+    carry_add(x,x_carry,n);
+    carry_add(x,x_carry,n);
+    printvariable(x, "x*y",n);
     prettyprinting(x,"x*y",n,decimalsPerRadix);
 
     /////////////////////////
