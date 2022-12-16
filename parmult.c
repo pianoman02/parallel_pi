@@ -283,7 +283,7 @@ void setToZero(double complex *x, long n){
     for (int i=0; i<np; i++){
         x[i] = 0;
     }
-}
+} /*end setToZero*/
 
 void one_over_square_root(double complex *a, double complex *x, long *carry, long n,double complex *w, long*rho_np, long*rho_p){
     /* Returns at x the square root of x.
@@ -329,6 +329,13 @@ void one_over_square_root(double complex *a, double complex *x, long *carry, lon
     vecfreec(half);
 } /*end one_over_sqare_root*/
 
+void square_root(double complex *a, double complex *x, long *carry, long n,double complex *w, long*rho_np, long*rho_p){
+    one_over_square_root(a,x,carry,n,w,rho_np,rho_p);
+    multiply(x,a,n,w,rho_np,rho_p,false);
+    carry_add(x,carry,n);
+    carry_add(x,carry,n);
+} /*end sqrt_root*/
+
 void runsqrt(){
     bsp_begin(P);
     long p = bsp_nprocs();
@@ -360,8 +367,8 @@ void runsqrt(){
     bsp_sync();
     ///////////////////
 
-    one_over_square_root(a,x,carry,n,w,rho_np,rho_p);
-    prettyprinting(x,"1/sqrt(2)",n,2);
+    square_root(a,x,carry,n,w,rho_np,rho_p);
+    prettyprinting(x,"sqrt(2)",n,2);
 
     bsp_pop_reg(carry);
     bsp_pop_reg(a);
@@ -376,6 +383,7 @@ void runsqrt(){
 
 
 }
+
 void runmult(){
     bsp_begin(P);
     long p= bsp_nprocs();
