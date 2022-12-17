@@ -193,6 +193,39 @@ void multiply_by_2(double complex *x, long n){
     }
 } /*end multiply_by_2*/
 
+void divide_by_2(double complex *x, long*carry, long n, long radix){
+    /*Divides the number by two, takes one synchronisation.
+      Fun fact: the carry-adds are here used in the reverse direction!*/
+    long p = bsp_nprocs();
+    long s = bsp_pid();
+    long np = n/bsp_nprocs();
+    if (s!=0){
+        for (long i=0; i<np; i++){
+            carry[i] = lround(creal(x[i]));
+            x[i] = carry[i]/2;
+            carry[i] = (carry[i]%2)*radix/2;
+        }
+        bsp_put(s-1,carry, carry,0,np*sizeof(long));
+    }
+    else{
+        for (long i=0; i<np-1; i++){
+            carry[i] = lround(creal(x[i+1]));
+            x[i+1] = carry[i]/2;
+            carry[i] = (carry[i]%2)*radix/2;
+        }
+        carry[np-1] = lround(creal(x[0]));
+        x[0] = carry[np-1]/2;
+        carry[np-1] = (carry[np-1]%2)*radix/2;
+        bsp_put(p-1,carry, carry,0,np*sizeof(long));
+    }
+    //////////////////////////////
+    bsp_sync();
+    //////////////////////////////
+    for (long i=0; i<np; i++){
+        x[i] += carry[i];
+    }
+} /*end divide_by_2*/
+
 void add(double complex *x, double complex *y, long n){
     /* Adds the two numbers by performing a pointwise addition
        The result is stored in x*/
@@ -204,12 +237,21 @@ void add(double complex *x, double complex *y, long n){
 
 void minus(double complex *x, double complex *y, long n){
     /* Calculates x-y
+       Stores the result in x  */
+    long np = n/bsp_nprocs();
+    for (int i=0; i<np; i++){
+        x[i] -= y[i];
+    }
+} /*end minus*/
+
+void minus_2(double complex *x, double complex *y, long n){
+    /* Calculates x-y
        Stores the result in y (NOTE!!)  */
     long np = n/bsp_nprocs();
     for (int i=0; i<np; i++){
         y[i] = x[i] - y[i];
     }
-} /*end minus*/
+} /*end minus_2*/
 
 void set_half_zero(double complex *x, long n){
     // TODO: make a range in which x is allowed to be nonzero.
@@ -226,7 +268,7 @@ void set_half_zero(double complex *x, long n){
             x[i] = 0;
 }
 
-void carry_add(double complex *x, long *x_carry, long n){
+void carry_add(double complex *x, long *carry, long n){
     /* Performs one carry-add operation on the number x
        Moreover, it rounds the number to get rid of any numerical errors.
        It is assumed that x is registered before calling this function
@@ -238,27 +280,27 @@ void carry_add(double complex *x, long *x_carry, long n){
     long np = n/p;
     if (s!= p-1){
         for (long i=0; i<np; i++){
-            x_carry[i] = lround(creal(x[i]));
-            x[i] = x_carry[i]%100;
-            x_carry[i] = x_carry[i]/100;
+            carry[i] = lround(creal(x[i]));
+            x[i] = carry[i]%100;
+            carry[i] = carry[i]/100;
         }
     }
     else{
         for (long i=1; i<np; i++){
-            x_carry[i] = lround(creal(x[i-1]));
-            x[i-1] = x_carry[i]%100;
-            x_carry[i] = x_carry[i]/100;
+            carry[i] = lround(creal(x[i-1]));
+            x[i-1] = carry[i]%100;
+            carry[i] = carry[i]/100;
         }
-        x_carry[0] = lround(creal(x[np-1]));
-        x[np-1] = x_carry[0]%100;
-        x_carry[0] = x_carry[0]/100;
+        carry[0] = lround(creal(x[np-1]));
+        x[np-1] = carry[0]%100;
+        carry[0] = carry[0]/100;
     }
-    bsp_put((s+1)%p,x_carry, x_carry,0,np*sizeof(long));
+    bsp_put((s+1)%p,carry, carry,0,np*sizeof(long));
     //////////////////////////////
     bsp_sync();
     //////////////////////////////
     for (long i=0; i<np; i++){
-        x[i] += x_carry[i];
+        x[i] += carry[i];
     }
 } /*end carry_add*/
 
@@ -291,11 +333,8 @@ void one_over_square_root(double complex *a, double complex *x, long *carry, lon
     long M = 10;
     long np = n/bsp_nprocs();
     setToHalf(x,n, 100); // set x to initial value 1/2
-    double complex *half = vecallocc(np);
-    setToHalf(half,n,100);
     double complex *xprev = vecallocc(np);
     bsp_push_reg(xprev,np*sizeof(double complex));
-    bsp_push_reg(half,np*sizeof(double complex));
 
     //////////////////////////////////
     bsp_sync();
@@ -315,8 +354,8 @@ void one_over_square_root(double complex *a, double complex *x, long *carry, lon
         set_half_zero(x,n);
         carry_add(x,carry,n);
         carry_add(x,carry,n);
-        minus(xprev,x,n);
-        multiply(x,half,n,w,rho_np,rho_p, false);
+        minus_2(xprev,x,n);
+        divide_by_2(x,carry,n,100);
         set_half_zero(x,n);
         carry_add(x,carry,n);
         carry_add(x,carry,n);
@@ -324,9 +363,7 @@ void one_over_square_root(double complex *a, double complex *x, long *carry, lon
         carry_add(x,carry,n);
     }
     bsp_pop_reg(xprev);
-    bsp_pop_reg(half);
     vecfreec(xprev);
-    vecfreec(half);
 } /*end one_over_sqare_root*/
 
 void square_root(double complex *a, double complex *x, long *carry, long n,double complex *w, long*rho_np, long*rho_p){
@@ -360,7 +397,7 @@ void one_over(double complex *a, double complex *x, long *carry, long n, double 
         carry_add(x,carry,n);
         carry_add(x,carry,n);
         multiply_by_2(xprev,n);
-        minus(xprev,x,n);
+        minus_2(xprev,x,n);
         set_half_zero(x,n);
         carry_add(x,carry,n);
     }
@@ -368,14 +405,61 @@ void one_over(double complex *a, double complex *x, long *carry, long n, double 
     vecfreec(xprev);
 } /*end one_over*/
 
+/*
 void calculatepi(double complex *x){
-    
-}
-
-void runone_over(){
     bsp_begin(P);
     long p = bsp_nprocs();
     long n= 32; // NOTE: n should be a power of two, as well as p
+    long decimalsPerRadix = 2;
+    long np = n/p;
+
+    double complex *a = vecallocc(np); 
+    double complex *b = vecallocc(np);
+    double complex *c = vecallocc(np);
+    double complex *d = vecallocc(np);
+
+    double complex 
+    long *carry = vecalloci(np);
+    setToInt(a,n,3);
+    setToInt(x,n,0);
+    bsp_push_reg(a,np*sizeof(double complex));
+    bsp_push_reg(x,np*sizeof(double complex));
+    bsp_push_reg(carry,np*sizeof(long));
+
+    // Initialize the weight and bit reversal tables
+    // First, determine the number of computation supersteps, by computing
+    //   the smallest integer t such that (n/p)^t >= p 
+    long t= 0;
+    for (long c=1; c<p; c *= np)
+        t++;
+    double complex *w= vecallocc((t+1)*np);
+    long *rho_np= vecalloci(np);
+    long *rho_p=  vecalloci(p);
+    bspfft_init(n,w,rho_np,rho_p);
+
+    ///////////////////
+    bsp_sync();
+    ///////////////////
+
+    one_over(a,x,carry,n,w,rho_np,rho_p);
+    prettyprinting(x,"1/3=",n,decimalsPerRadix);
+
+    bsp_pop_reg(carry);
+    bsp_pop_reg(a);
+    bsp_pop_reg(x);
+
+    vecfreei(carry);
+    vecfreec(a);
+    vecfreec(x);
+    vecfreei(rho_p);
+    vecfreei(rho_np);
+    vecfreec(w);
+}
+*/
+void runone_over(){
+    bsp_begin(P);
+    long p = bsp_nprocs();
+    long n= 16; // NOTE: n should be a power of two, as well as p
     long decimalsPerRadix = 2;
     long np = n/p;
 
@@ -403,8 +487,8 @@ void runone_over(){
     bsp_sync();
     ///////////////////
 
-    one_over(a,x,carry,n,w,rho_np,rho_p);
-    prettyprinting(x,"1/3=",n,decimalsPerRadix);
+    square_root(a,x,carry,n,w,rho_np,rho_p);
+    prettyprinting(x,"sqrt(3)=",n,decimalsPerRadix);
 
     bsp_pop_reg(carry);
     bsp_pop_reg(a);
