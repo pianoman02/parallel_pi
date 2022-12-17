@@ -186,6 +186,15 @@ void multiply(double complex *x, double complex *y,long n, double complex *w, lo
     }
 } /*end multiply*/
 
+void square(double complex *x, long n, double complex *w, long *rho_np, long*rho_p){
+    long np = n/bsp_nprocs();
+    bspfft(x,n,true,w,rho_np,rho_p);
+    for (int i=0; i<np; i++){
+        x[i] *= x[i];
+    }
+    bspfft(x,n,false,w,rho_np,rho_p);
+} /*end square*/
+
 void multiply_by_2(double complex *x, long n){
     long np = n/bsp_nprocs();
     for (int i=0;i<np; i++){
@@ -369,6 +378,7 @@ void one_over_square_root(double complex *a, double complex *x, long *carry, lon
 void square_root(double complex *a, double complex *x, long *carry, long n,double complex *w, long*rho_np, long*rho_p){
     one_over_square_root(a,x,carry,n,w,rho_np,rho_p);
     multiply(x,a,n,w,rho_np,rho_p,false);
+    set_half_zero(x,n);
     carry_add(x,carry,n);
     carry_add(x,carry,n);
 } /*end sqrt_root*/
@@ -405,25 +415,29 @@ void one_over(double complex *a, double complex *x, long *carry, long n, double 
     vecfreec(xprev);
 } /*end one_over*/
 
-/*
-void calculatepi(double complex *x){
+void calculatepi(){
     bsp_begin(P);
     long p = bsp_nprocs();
     long n= 32; // NOTE: n should be a power of two, as well as p
     long decimalsPerRadix = 2;
     long np = n/p;
 
-    double complex *a = vecallocc(np); 
+    // Initialise and register
+    double complex *a = vecallocc(np);
+    double complex *aprev = vecallocc(np);
     double complex *b = vecallocc(np);
     double complex *c = vecallocc(np);
     double complex *d = vecallocc(np);
+    double complex *power2 = vecallocc(np);
 
-    double complex 
-    long *carry = vecalloci(np);
-    setToInt(a,n,3);
-    setToInt(x,n,0);
     bsp_push_reg(a,np*sizeof(double complex));
-    bsp_push_reg(x,np*sizeof(double complex));
+    bsp_push_reg(aprev, np*sizeof(double complex));
+    bsp_push_reg(b,np*sizeof(double complex));
+    bsp_push_reg(c,np*sizeof(double complex));
+    bsp_push_reg(d,np*sizeof(double complex));
+    bsp_push_reg(power2, np*sizeof(double complex));
+
+    long *carry = vecalloci(np);
     bsp_push_reg(carry,np*sizeof(long));
 
     // Initialize the weight and bit reversal tables
@@ -441,21 +455,99 @@ void calculatepi(double complex *x){
     bsp_sync();
     ///////////////////
 
-    one_over(a,x,carry,n,w,rho_np,rho_p);
-    prettyprinting(x,"1/3=",n,decimalsPerRadix);
+    // Initialising values
+    setToInt(aprev,n,2);
+    square_root(aprev,a,carry,n,w,rho_np,rho_p);
+    setToInt(power2,n,1);
+    setToInt(b,n,1);
+    setToInt(d,n,1);
+    long M = 10;
+    for (long i=0; i<M; i++){
+        prettyprinting(a,"a",n,decimalsPerRadix);
+        prettyprinting(b,"b",n,decimalsPerRadix);
+        prettyprinting(c,"c",n,decimalsPerRadix);
+        prettyprinting(d,"d",n,decimalsPerRadix);
+        copy(a,aprev,n);
+        add(a,b,n);
+
+        divide_by_2(a,carry,n,100);
+        set_half_zero(a,n);
+        carry_add(a,carry,n);
+
+        multiply(aprev,b,n,w,rho_np,rho_p, false); 
+        set_half_zero(aprev,n);
+        carry_add(aprev,carry,n);
+        carry_add(aprev,carry,n);
+
+        square_root(aprev,b,carry,n,w,rho_np,rho_p);
+
+        multiply_by_2(power2,n);
+        carry_add(power2,carry,n);
+
+        copy(a,aprev,n);
+        multiply(aprev,a,n,w,rho_np,rho_p, false);
+        set_half_zero(aprev,n);
+        carry_add(aprev,carry,n);
+        carry_add(aprev,carry,n);
+
+        copy(b,c,n);
+        multiply(c,b,n,w,rho_np,rho_p,false);
+        set_half_zero(c,n);
+        carry_add(c,carry,n);
+        carry_add(c,carry,n);
+
+        minus_2(aprev,c,n);
+
+        multiply(c,power2,n,w,rho_np,rho_p, false);
+        set_half_zero(c,n);
+        carry_add(c,carry,n);
+        carry_add(c,carry,n);
+
+        minus(d,c,n);
+        
+    }
+    square(a,n,w,rho_np,rho_p);
+    set_half_zero(a,n);
+    carry_add(a,carry,n);
+    carry_add(a,carry,n);
+
+    multiply_by_2(a,n);
+    set_half_zero(a,n);
+    carry_add(a,carry,n);
+    carry_add(a,carry,n);
+
+    one_over(d,aprev,carry,n,w,rho_np,rho_p);
+
+    multiply(a,aprev,n,w,rho_np,rho_p,true);
+    set_half_zero(a,n);
+    carry_add(a,carry,n);
+    carry_add(a,carry,n);
+    prettyprinting(a,"pi",n,decimalsPerRadix);
+
+
+    // Deregister and free
+    bsp_pop_reg(a);
+    bsp_pop_reg(aprev);
+    bsp_pop_reg(b);
+    bsp_pop_reg(c);
+    bsp_pop_reg(d);
+    bsp_pop_reg(power2);
+
+    vecfreec(a);
+    vecfreec(aprev);
+    vecfreec(b);
+    vecfreec(c);
+    vecfreec(d);
+    vecfreec(power2);
 
     bsp_pop_reg(carry);
-    bsp_pop_reg(a);
-    bsp_pop_reg(x);
-
     vecfreei(carry);
-    vecfreec(a);
-    vecfreec(x);
+
     vecfreei(rho_p);
     vecfreei(rho_np);
     vecfreec(w);
 }
-*/
+
 void runone_over(){
     bsp_begin(P);
     long p = bsp_nprocs();
@@ -487,8 +579,8 @@ void runone_over(){
     bsp_sync();
     ///////////////////
 
-    square_root(a,x,carry,n,w,rho_np,rho_p);
-    prettyprinting(x,"sqrt(3)=",n,decimalsPerRadix);
+    one_over(a,x,carry,n,w,rho_np,rho_p);
+    prettyprinting(x,"1/3=",n,decimalsPerRadix);
 
     bsp_pop_reg(carry);
     bsp_pop_reg(a);
@@ -570,7 +662,7 @@ void runmult(){
  }
 
 int main(int argc, char **argv){
-    bsp_init(runone_over, argc, argv);
+    bsp_init(calculatepi, argc, argv);
  
     /* Sequential part */
     printf("How many processors do you want to use?\n"); fflush(stdout);
@@ -582,7 +674,7 @@ int main(int argc, char **argv){
     }
  
     /* SPMD part */
-    runone_over();
+    calculatepi();
  
     /* Sequential part */
     exit(EXIT_SUCCESS);
