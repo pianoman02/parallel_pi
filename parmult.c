@@ -186,6 +186,13 @@ void multiply(double complex *x, double complex *y,long n, double complex *w, lo
     }
 } /*end multiply*/
 
+void multiply_by_2(double complex *x, long n){
+    long np = n/bsp_nprocs();
+    for (int i=0;i<np; i++){
+        x[i] *= 2;
+    }
+} /*end multiply_by_2*/
+
 void add(double complex *x, double complex *y, long n){
     /* Adds the two numbers by performing a pointwise addition
        The result is stored in x*/
@@ -267,26 +274,19 @@ void setToHalf(double complex *x, long n, long radix){
         x[np-1] = radix/2;
 } /*end setToHalf*/
 
-void setToTwo(double complex *x, long n){
-    /* Sets the number x to be 2*/
+void setToInt(double complex *x, long n, int v){
+    /* Sets the number x to be v. We must have v<radix*/
     long np = n/bsp_nprocs();
     long s = bsp_pid();
     for (int i=0; i<np; i++){
         x[i] = 0;
     }
     if (s==0)
-        x[0] = 2;
+        x[0] = v;
 }
 
-void setToZero(double complex *x, long n){
-    long np = n/bsp_nprocs();
-    for (int i=0; i<np; i++){
-        x[i] = 0;
-    }
-} /*end setToZero*/
-
 void one_over_square_root(double complex *a, double complex *x, long *carry, long n,double complex *w, long*rho_np, long*rho_p){
-    /* Returns at x the square root of x.
+    /* Returns at x the 1/sqrt(a).
     */
     long M = 10;
     long np = n/bsp_nprocs();
@@ -336,7 +336,43 @@ void square_root(double complex *a, double complex *x, long *carry, long n,doubl
     carry_add(x,carry,n);
 } /*end sqrt_root*/
 
-void runsqrt(){
+void one_over(double complex *a, double complex *x, long *carry, long n, double complex *w, long*rho_np, long*rho_p){
+    /* Returns at x the number 1/a.
+    */
+    long M = 10;
+    long np = n/bsp_nprocs();
+    setToHalf(x,n, 100); // set x to initial value 1/2
+    double complex *xprev = vecallocc(np);
+    bsp_push_reg(xprev,np*sizeof(double complex));
+
+    //////////////////////////////////
+    bsp_sync();
+    //////////////////////////////////
+
+    for (int i=0; i<M; i++){
+        copy(x,xprev,n);
+        multiply(x,xprev,n,w,rho_np,rho_p, false);
+        set_half_zero(x,n);
+        carry_add(x,carry,n);
+        carry_add(x,carry,n);
+        multiply(x,a,n,w,rho_np,rho_p, false);
+        set_half_zero(x,n);
+        carry_add(x,carry,n);
+        carry_add(x,carry,n);
+        multiply_by_2(xprev,n);
+        minus(xprev,x,n);
+        set_half_zero(x,n);
+        carry_add(x,carry,n);
+    }
+    bsp_pop_reg(xprev);
+    vecfreec(xprev);
+} /*end one_over*/
+
+void calculatepi(double complex *x){
+    
+}
+
+void runone_over(){
     bsp_begin(P);
     long p = bsp_nprocs();
     long n= 32; // NOTE: n should be a power of two, as well as p
@@ -346,8 +382,8 @@ void runsqrt(){
     double complex *a = vecallocc(np);
     double complex *x = vecallocc(np);
     long *carry = vecalloci(np);
-    setToTwo(a,n);
-    setToZero(x,n);
+    setToInt(a,n,3);
+    setToInt(x,n,0);
     bsp_push_reg(a,np*sizeof(double complex));
     bsp_push_reg(x,np*sizeof(double complex));
     bsp_push_reg(carry,np*sizeof(long));
@@ -367,8 +403,8 @@ void runsqrt(){
     bsp_sync();
     ///////////////////
 
-    square_root(a,x,carry,n,w,rho_np,rho_p);
-    prettyprinting(x,"sqrt(2)",n,2);
+    one_over(a,x,carry,n,w,rho_np,rho_p);
+    prettyprinting(x,"1/3=",n,decimalsPerRadix);
 
     bsp_pop_reg(carry);
     bsp_pop_reg(a);
@@ -450,7 +486,7 @@ void runmult(){
  }
 
 int main(int argc, char **argv){
-    bsp_init(runsqrt, argc, argv);
+    bsp_init(runone_over, argc, argv);
  
     /* Sequential part */
     printf("How many processors do you want to use?\n"); fflush(stdout);
@@ -462,7 +498,7 @@ int main(int argc, char **argv){
     }
  
     /* SPMD part */
-    runsqrt();
+    runone_over();
  
     /* Sequential part */
     exit(EXIT_SUCCESS);
