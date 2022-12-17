@@ -1,4 +1,5 @@
 #include<stdio.h>
+#include<stdlib.h>
 #include<string.h>
 #include "bspedupack.h"
 
@@ -80,7 +81,7 @@ void carry_add_seq(double complex *x, long radix, long n){
     }
 } /*end carry_add_seq*/
 
-void prettyprinting(double complex *x, char* st, long n, long decimalsPerRadix){
+void prettyprinting(double complex *x, char* st, long n, long decimalsPerRadix, bool checkpi){
     /* For prettyprinting, all numbers are brought back to processor 0
        Therefore, it is slow, but good for final output.
 
@@ -128,6 +129,29 @@ void prettyprinting(double complex *x, char* st, long n, long decimalsPerRadix){
             xystr[decimalsPerRadix*n-2-decimalsPerRadix*i] = ((char)val/10)+'0';
         }
         printf("%s = %s\n",st,xystr);
+
+        // how to open a file is from https://www.geeksforgeeks.org/c-program-to-read-contents-of-whole-file/
+        FILE* ptr;
+        char ch;
+        ptr = fopen("pi.txt","r");
+
+        if (ptr == NULL){
+            printf("file can't be opened \n");
+        }
+        long i=0;
+        do {
+            ch = fgetc(ptr);
+            if (ch != xystr[i])
+                break;
+            else
+                i++;
+            // Checking if character is not EOF.
+            // If it is EOF stop reading.
+        } while (ch != EOF);
+    
+        // Closing the file
+        fclose(ptr);
+        printf("Congratulations, we've got %ld good decimals\n",i);
 
         bsp_pop_reg(x0);
         vecfreec(x0);
@@ -339,7 +363,7 @@ void setToInt(double complex *x, long n, int v){
 void one_over_square_root(double complex *a, double complex *x, long *carry, long n,double complex *w, long*rho_np, long*rho_p){
     /* Returns at x the 1/sqrt(a).
     */
-    long M = 10;
+    long M = 20;
     long np = n/bsp_nprocs();
     setToHalf(x,n, 100); // set x to initial value 1/2
     double complex *xprev = vecallocc(np);
@@ -418,7 +442,7 @@ void one_over(double complex *a, double complex *x, long *carry, long n, double 
 void calculatepi(){
     bsp_begin(P);
     long p = bsp_nprocs();
-    long n= 32; // NOTE: n should be a power of two, as well as p
+    long n= 512; // NOTE: n should be a power of two, as well as p
     long decimalsPerRadix = 2;
     long np = n/p;
 
@@ -461,12 +485,8 @@ void calculatepi(){
     setToInt(power2,n,1);
     setToInt(b,n,1);
     setToInt(d,n,1);
-    long M = 10;
+    long M = 20;
     for (long i=0; i<M; i++){
-        prettyprinting(a,"a",n,decimalsPerRadix);
-        prettyprinting(b,"b",n,decimalsPerRadix);
-        prettyprinting(c,"c",n,decimalsPerRadix);
-        prettyprinting(d,"d",n,decimalsPerRadix);
         copy(a,aprev,n);
         add(a,b,n);
 
@@ -522,8 +542,8 @@ void calculatepi(){
     set_half_zero(a,n);
     carry_add(a,carry,n);
     carry_add(a,carry,n);
-    prettyprinting(a,"pi",n,decimalsPerRadix);
-
+    prettyprinting(a,"pi",n,decimalsPerRadix,true);
+    // Now check how many decimals I've got right
 
     // Deregister and free
     bsp_pop_reg(a);
@@ -580,7 +600,7 @@ void runone_over(){
     ///////////////////
 
     one_over(a,x,carry,n,w,rho_np,rho_p);
-    prettyprinting(x,"1/3=",n,decimalsPerRadix);
+    prettyprinting(x,"1/3=",n,decimalsPerRadix,false);
 
     bsp_pop_reg(carry);
     bsp_pop_reg(a);
@@ -643,7 +663,7 @@ void runmult(){
 
     multiply(x,y,n,w,rho_np,rho_p, true);
     carry_add(x,x_carry,n);
-    prettyprinting(x,"x*y",n,decimalsPerRadix);
+    prettyprinting(x,"x*y",n,decimalsPerRadix,false);
 
     bsp_pop_reg(x);
     bsp_pop_reg(y);
