@@ -1,14 +1,19 @@
 #include<stdio.h>
+#include<stdlib.h>
 #include<string.h>
 #include "bspedupack.h"
 
 long P; // number of processors requested
+long N; // size of the number
+long DECIMALS; // amount of decimals of radix;
+long M; 
 
 // Functions from bspfft
 void bspfft(double complex *x, long n, bool forward, double complex *w,
                 long *rho_np, long *rho_p);
 void bspfft_init(long n, double complex *w, long *rho_np, long *rho_p);
 
+// NB: this function works not yet for radix != 100
 void readvariable(double complex *x, char* st, long n, long decimalsPerRadix){
     /* We assume x has already been registered and has size n/p
        A bsp_sync is required to actually obtain the variable*/
@@ -80,7 +85,22 @@ void carry_add_seq(double complex *x, long radix, long n){
     }
 } /*end carry_add_seq*/
 
-void prettyprinting(double complex *x, char* st, long n, long decimalsPerRadix){
+void printvariable(double complex *x, char* st,long n){
+    /* This function is used for debugging reasons */
+    long np = n/bsp_nprocs();
+    long s = bsp_pid();
+    for (long i=0; i<np; i++){
+        printf("In %ld index %ld the value of %s is %lf + %lf i\n",s,i,st,creal(x[i]),cimag(x[i]));
+    }
+}  /*end printvariable*/
+
+void printvariable_seq(double complex *x, char* st, long n){
+    for (long i=0; i<n; i++){
+        printf("In index %ld the value of %s is %lf + %lf i\n",i,st,creal(x[i]),cimag(x[i]));
+    }
+}
+
+void prettyprinting(double complex *x, char* st, long n, long decimalsPerRadix,long radix, bool checkpi){
     /* For prettyprinting, all numbers are brought back to processor 0
        Therefore, it is slow, but good for final output.
 
@@ -117,18 +137,46 @@ void prettyprinting(double complex *x, char* st, long n, long decimalsPerRadix){
     ///////////////////////
 
     if (s==0){
-        carry_add_seq(x0,100,n);
-        // Handeling the rollovers
+        carry_add_seq(x0,radix,n);
         char xystr[n*decimalsPerRadix+1];
         xystr[n*decimalsPerRadix] = '\0';
         long val = 0;
+        long devideby = 1;
         for (long i=0; i<n; i++){
             val = lround(creal(x0[i]));
-            xystr[decimalsPerRadix*n-1-decimalsPerRadix*i] = ((char)val%10)+'0';
-            xystr[decimalsPerRadix*n-2-decimalsPerRadix*i] = ((char)val/10)+'0';
+            devideby=1;
+            for (long j=1; j<= decimalsPerRadix; j++){
+                xystr[decimalsPerRadix*n-j-decimalsPerRadix*i] = (char)((val/devideby)%10)+'0';
+                devideby *=10;
+            }
         }
-        printf("%s = %s\n",st,xystr);
+        //printf("%s = %s\n",st,xystr);
 
+        if (checkpi){
+            // how to open a file is from https://www.geeksforgeeks.org/c-program-to-read-contents-of-whole-file/
+            FILE* ptr;
+            char ch;
+            ptr = fopen("pi.txt","r");
+
+            if (ptr == NULL){
+                printf("file can't be opened \n");
+            }
+            long i=0;
+            do {
+                ch = fgetc(ptr);
+                if (ch != xystr[i])
+                    break;
+                else
+                    i++;
+                // Checking if character is not EOF.
+                // If it is EOF stop reading.
+            } while (ch != EOF);
+        
+            // Closing the file
+            fclose(ptr);
+            printf("Congratulations, we've got %ld good decimals\n",i);
+        }
+        
         bsp_pop_reg(x0);
         vecfreec(x0);
     }
@@ -136,15 +184,6 @@ void prettyprinting(double complex *x, char* st, long n, long decimalsPerRadix){
         bsp_pop_reg(&x0);
     fflush(stdout);
 } /*end prettyprinting*/
-
-void printvariable(double complex *x, char* st,long n){
-    /* This function is used for debugging reasons */
-    long np = n/bsp_nprocs();
-    long s = bsp_pid();
-    for (long i=0; i<np; i++){
-        printf("In %ld index %ld the value of %s is %lf + %lf i\n",s,i,st,creal(x[i]),cimag(x[i]));
-    }
-}  /*end printvariable*/
 
 void copy(double complex *x, double complex *y, long n){
     /* Copies x to y*/
@@ -277,7 +316,7 @@ void set_half_zero(double complex *x, long n){
             x[i] = 0;
 }
 
-void carry_add(double complex *x, long *carry, long n){
+void carry_add(double complex *x, long *carry,long radix, long n){
     /* Performs one carry-add operation on the number x
        Moreover, it rounds the number to get rid of any numerical errors.
        It is assumed that x is registered before calling this function
@@ -290,19 +329,19 @@ void carry_add(double complex *x, long *carry, long n){
     if (s!= p-1){
         for (long i=0; i<np; i++){
             carry[i] = lround(creal(x[i]));
-            x[i] = carry[i]%100;
-            carry[i] = carry[i]/100;
+            x[i] = carry[i]%radix;
+            carry[i] = carry[i]/radix;
         }
     }
     else{
         for (long i=1; i<np; i++){
             carry[i] = lround(creal(x[i-1]));
-            x[i-1] = carry[i]%100;
-            carry[i] = carry[i]/100;
+            x[i-1] = carry[i]%radix;
+            carry[i] = carry[i]/radix;
         }
         carry[0] = lround(creal(x[np-1]));
-        x[np-1] = carry[0]%100;
-        carry[0] = carry[0]/100;
+        x[np-1] = carry[0]%radix;
+        carry[0] = carry[0]/radix;
     }
     bsp_put((s+1)%p,carry, carry,0,np*sizeof(long));
     //////////////////////////////
@@ -336,12 +375,11 @@ void setToInt(double complex *x, long n, int v){
         x[0] = v;
 }
 
-void one_over_square_root(double complex *a, double complex *x, long *carry, long n,double complex *w, long*rho_np, long*rho_p){
+void one_over_square_root(double complex *a, double complex *x, long *carry,long radix, long n,double complex *w, long*rho_np, long*rho_p){
     /* Returns at x the 1/sqrt(a).
     */
-    long M = 10;
     long np = n/bsp_nprocs();
-    setToHalf(x,n, 100); // set x to initial value 1/2
+    setToHalf(x,n, radix); // set x to initial value 1/2
     double complex *xprev = vecallocc(np);
     bsp_push_reg(xprev,np*sizeof(double complex));
 
@@ -353,42 +391,41 @@ void one_over_square_root(double complex *a, double complex *x, long *carry, lon
         copy(x,xprev,n);
         multiply(x,xprev,n,w,rho_np,rho_p, false);
         set_half_zero(x,n);
-        carry_add(x,carry,n);
-        carry_add(x,carry,n);
+        carry_add(x,carry,radix,n);
+        carry_add(x,carry,radix,n);
         multiply(x,xprev,n,w,rho_np,rho_p, false);
         set_half_zero(x,n);
-        carry_add(x,carry,n);
-        carry_add(x,carry,n);
+        carry_add(x,carry,radix,n);
+        carry_add(x,carry,radix,n);
         multiply(x,a,n,w,rho_np,rho_p, false);
         set_half_zero(x,n);
-        carry_add(x,carry,n);
-        carry_add(x,carry,n);
+        carry_add(x,carry,radix,n);
+        carry_add(x,carry,radix,n);
         minus_2(xprev,x,n);
-        divide_by_2(x,carry,n,100);
+        divide_by_2(x,carry,n,radix);
         set_half_zero(x,n);
-        carry_add(x,carry,n);
-        carry_add(x,carry,n);
+        carry_add(x,carry,radix,n);
+        carry_add(x,carry,radix,n);
         add(x,xprev,n);
-        carry_add(x,carry,n);
+        carry_add(x,carry,radix,n);
     }
     bsp_pop_reg(xprev);
     vecfreec(xprev);
 } /*end one_over_sqare_root*/
 
-void square_root(double complex *a, double complex *x, long *carry, long n,double complex *w, long*rho_np, long*rho_p){
-    one_over_square_root(a,x,carry,n,w,rho_np,rho_p);
+void square_root(double complex *a, double complex *x, long *carry,long radix, long n,double complex *w, long*rho_np, long*rho_p){
+    one_over_square_root(a,x,carry,radix,n,w,rho_np,rho_p);
     multiply(x,a,n,w,rho_np,rho_p,false);
     set_half_zero(x,n);
-    carry_add(x,carry,n);
-    carry_add(x,carry,n);
+    carry_add(x,carry,radix,n);
+    carry_add(x,carry,radix,n);
 } /*end sqrt_root*/
 
-void one_over(double complex *a, double complex *x, long *carry, long n, double complex *w, long*rho_np, long*rho_p){
+void one_over(double complex *a, double complex *x, long *carry,long radix, long n, double complex *w, long*rho_np, long*rho_p){
     /* Returns at x the number 1/a.
     */
-    long M = 10;
     long np = n/bsp_nprocs();
-    setToHalf(x,n, 100); // set x to initial value 1/2
+    setToHalf(x,n, radix); // set x to initial value 1/2
     double complex *xprev = vecallocc(np);
     bsp_push_reg(xprev,np*sizeof(double complex));
 
@@ -400,16 +437,16 @@ void one_over(double complex *a, double complex *x, long *carry, long n, double 
         copy(x,xprev,n);
         multiply(x,xprev,n,w,rho_np,rho_p, false);
         set_half_zero(x,n);
-        carry_add(x,carry,n);
-        carry_add(x,carry,n);
+        carry_add(x,carry,radix,n);
+        carry_add(x,carry,radix,n);
         multiply(x,a,n,w,rho_np,rho_p, false);
         set_half_zero(x,n);
-        carry_add(x,carry,n);
-        carry_add(x,carry,n);
+        carry_add(x,carry,radix,n);
+        carry_add(x,carry,radix,n);
         multiply_by_2(xprev,n);
         minus_2(xprev,x,n);
         set_half_zero(x,n);
-        carry_add(x,carry,n);
+        carry_add(x,carry,radix,n);
     }
     bsp_pop_reg(xprev);
     vecfreec(xprev);
@@ -418,8 +455,13 @@ void one_over(double complex *a, double complex *x, long *carry, long n, double 
 void calculatepi(){
     bsp_begin(P);
     long p = bsp_nprocs();
-    long n= 32; // NOTE: n should be a power of two, as well as p
-    long decimalsPerRadix = 2;
+    long n= N; // NOTE: n should be a power of two, as well as p
+    // NOTE: if you choose n too small, then the number of steps in the loops is too large in comparison to the numbers, so you get nonsense perhaps
+    long decimalsPerRadix = DECIMALS; // max 5
+    long radix =1;
+    for (long i=0; i<decimalsPerRadix; i++){
+        radix *= 10;
+    }
     long np = n/p;
 
     // Initialise and register
@@ -457,73 +499,69 @@ void calculatepi(){
 
     // Initialising values
     setToInt(aprev,n,2);
-    square_root(aprev,a,carry,n,w,rho_np,rho_p);
+    square_root(aprev,a,carry,radix,n,w,rho_np,rho_p);
     setToInt(power2,n,1);
     setToInt(b,n,1);
     setToInt(d,n,1);
-    long M = 10;
+    long M = 25;
     for (long i=0; i<M; i++){
-        prettyprinting(a,"a",n,decimalsPerRadix);
-        prettyprinting(b,"b",n,decimalsPerRadix);
-        prettyprinting(c,"c",n,decimalsPerRadix);
-        prettyprinting(d,"d",n,decimalsPerRadix);
         copy(a,aprev,n);
         add(a,b,n);
 
-        divide_by_2(a,carry,n,100);
+        divide_by_2(a,carry,n,radix);
         set_half_zero(a,n);
-        carry_add(a,carry,n);
+        carry_add(a,carry,radix,n);
 
         multiply(aprev,b,n,w,rho_np,rho_p, false); 
         set_half_zero(aprev,n);
-        carry_add(aprev,carry,n);
-        carry_add(aprev,carry,n);
+        carry_add(aprev,carry,radix,n);
+        carry_add(aprev,carry,radix,n);
 
-        square_root(aprev,b,carry,n,w,rho_np,rho_p);
+        square_root(aprev,b,carry,radix,n,w,rho_np,rho_p);
 
         multiply_by_2(power2,n);
-        carry_add(power2,carry,n);
+        carry_add(power2,carry,radix,n);
 
         copy(a,aprev,n);
         multiply(aprev,a,n,w,rho_np,rho_p, false);
         set_half_zero(aprev,n);
-        carry_add(aprev,carry,n);
-        carry_add(aprev,carry,n);
+        carry_add(aprev,carry,radix,n);
+        carry_add(aprev,carry,radix,n);
 
         copy(b,c,n);
         multiply(c,b,n,w,rho_np,rho_p,false);
         set_half_zero(c,n);
-        carry_add(c,carry,n);
-        carry_add(c,carry,n);
+        carry_add(c,carry,radix,n);
+        carry_add(c,carry,radix,n);
 
         minus_2(aprev,c,n);
 
         multiply(c,power2,n,w,rho_np,rho_p, false);
         set_half_zero(c,n);
-        carry_add(c,carry,n);
-        carry_add(c,carry,n);
+        carry_add(c,carry,radix,n);
+        carry_add(c,carry,radix,n);
 
         minus(d,c,n);
         
     }
     square(a,n,w,rho_np,rho_p);
     set_half_zero(a,n);
-    carry_add(a,carry,n);
-    carry_add(a,carry,n);
+    carry_add(a,carry,radix,n);
+    carry_add(a,carry,radix,n);
 
     multiply_by_2(a,n);
     set_half_zero(a,n);
-    carry_add(a,carry,n);
-    carry_add(a,carry,n);
+    carry_add(a,carry,radix,n);
+    carry_add(a,carry,radix,n);
 
-    one_over(d,aprev,carry,n,w,rho_np,rho_p);
+    one_over(d,aprev,carry,radix,n,w,rho_np,rho_p);
 
     multiply(a,aprev,n,w,rho_np,rho_p,true);
     set_half_zero(a,n);
-    carry_add(a,carry,n);
-    carry_add(a,carry,n);
-    prettyprinting(a,"pi",n,decimalsPerRadix);
-
+    carry_add(a,carry,radix,n);
+    carry_add(a,carry,radix,n);
+    prettyprinting(a,"pi",n,decimalsPerRadix,radix,true);
+    // Now check how many decimals I've got right
 
     // Deregister and free
     bsp_pop_reg(a);
@@ -552,7 +590,8 @@ void runone_over(){
     bsp_begin(P);
     long p = bsp_nprocs();
     long n= 16; // NOTE: n should be a power of two, as well as p
-    long decimalsPerRadix = 2;
+    long decimalsPerRadix = 3;
+    long radix = 1000;
     long np = n/p;
 
     double complex *a = vecallocc(np);
@@ -579,8 +618,9 @@ void runone_over(){
     bsp_sync();
     ///////////////////
 
-    one_over(a,x,carry,n,w,rho_np,rho_p);
-    prettyprinting(x,"1/3=",n,decimalsPerRadix);
+    one_over(a,x,carry,radix,n,w,rho_np,rho_p);
+    printvariable(x,"1/3",n);
+    prettyprinting(x,"1/3",n,decimalsPerRadix,radix,false);
 
     bsp_pop_reg(carry);
     bsp_pop_reg(a);
@@ -602,6 +642,7 @@ void runmult(){
     long n = 256; // NOTE: n should be a power of two, as well as p
     long decimalsPerRadix = 2;
     long np = n/p;
+    long radix = 100;
 
     // Allocate, register, and initialize vectors 
     double complex *x= vecallocc(np);
@@ -642,8 +683,8 @@ void runmult(){
     /////////////////////////
 
     multiply(x,y,n,w,rho_np,rho_p, true);
-    carry_add(x,x_carry,n);
-    prettyprinting(x,"x*y",n,decimalsPerRadix);
+    carry_add(x,x_carry,radix,n);
+    prettyprinting(x,"x*y",n,decimalsPerRadix,radix,false);
 
     bsp_pop_reg(x);
     bsp_pop_reg(y);
@@ -672,7 +713,13 @@ int main(int argc, char **argv){
         fflush(stdout);
         exit(EXIT_FAILURE);
     }
- 
+    printf("What precision n do you want to use?\n"); fflush(stdout);
+    scanf("%ld",&N);
+    printf("How digits should the radix have?\n"); fflush(stdout);
+    scanf("%ld",&DECIMALS);
+    printf("How many iterations (M)?\n");
+    scanf("%ld",&M);
+
     /* SPMD part */
     calculatepi();
  
