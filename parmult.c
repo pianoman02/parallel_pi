@@ -208,6 +208,7 @@ void multiply(double complex *x, double complex *y,long n, double complex *w, lo
         y2 = vecallocc(np);
         bsp_push_reg(y2,np*sizeof(double complex));
         copy(y,y2,n);
+        // Note, we don't need to do a sync since that is already done in the first fft.
     }
     else
         y2 = y;
@@ -381,26 +382,48 @@ void one_over_square_root(double complex *a, double complex *x, long *carry,long
     long np = n/bsp_nprocs();
     setToHalf(x,n, radix); // set x to initial value 1/2
     double complex *xprev = vecallocc(np);
+    double complex *afft = vecallocc(np);
+    double complex *xfft = vecallocc(np);
     bsp_push_reg(xprev,np*sizeof(double complex));
+    bsp_push_reg(afft, np*sizeof(double complex));
+    bsp_push_reg(xfft, np*sizeof(double complex));
 
     //////////////////////////////////
     bsp_sync();
     //////////////////////////////////
+    copy(a,afft,n);
+    bspfft(afft,n,true,w,rho_np,rho_p);
 
     for (int i=0; i<M; i++){
         copy(x,xprev,n);
-        multiply(x,xprev,n,w,rho_np,rho_p, false);
+        // Calculating ax^3
+        copy(x,xfft,n);
+        bspfft(xfft,n,true,w,rho_np,rho_p);
+        for (int i=0; i<np; i++){
+            x[i] =xfft[i]*xfft[i];
+        }
+        bspfft(x,n,false,w,rho_np,rho_p);
         set_half_zero(x,n);
         carry_add(x,carry,radix,n);
         carry_add(x,carry,radix,n);
-        multiply(x,xprev,n,w,rho_np,rho_p, false);
+        bspfft(x,n,true,w,rho_np,rho_p);
+        for (int i=0; i<np; i++){
+            x[i] =x[i]*xfft[i];
+        }
+        bspfft(x,n,false,w,rho_np,rho_p);
         set_half_zero(x,n);
         carry_add(x,carry,radix,n);
         carry_add(x,carry,radix,n);
-        multiply(x,a,n,w,rho_np,rho_p, false);
+        bspfft(x,n,true,w,rho_np,rho_p);
+        for (int i=0; i<np; i++){
+            x[i] =x[i]*afft[i];
+        }
+        bspfft(x,n,false,w,rho_np,rho_p);
         set_half_zero(x,n);
         carry_add(x,carry,radix,n);
         carry_add(x,carry,radix,n);
+
+        // The rest
         minus_2(xprev,x,n);
         divide_by_2(x,carry,n,radix);
         set_half_zero(x,n);
@@ -410,7 +433,11 @@ void one_over_square_root(double complex *a, double complex *x, long *carry,long
         carry_add(x,carry,radix,n);
     }
     bsp_pop_reg(xprev);
+    bsp_pop_reg(afft);
+    bsp_pop_reg(xfft);
     vecfreec(xprev);
+    vecfreec(afft);
+    vecfreec(xfft);
 } /*end one_over_sqare_root*/
 
 void square_root(double complex *a, double complex *x, long *carry,long radix, long n,double complex *w, long*rho_np, long*rho_p){
