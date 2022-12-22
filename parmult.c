@@ -150,7 +150,13 @@ void prettyprinting(double complex *x, char* st, long n, long decimalsPerRadix,l
                 devideby *=10;
             }
         }
-        //printf("%s = %s\n",st,xystr);
+        // Now print the first 1000 decimals
+        char prstr[1001];
+        prstr[1000] = '\0';
+        for (long i=0; i<1000 && i<n*decimalsPerRadix; i++){
+            prstr[i] = xystr[i];
+        }
+        printf("%s = %s\n",st,prstr);
 
         if (checkpi){
             // how to open a file is from https://www.geeksforgeeks.org/c-program-to-read-contents-of-whole-file/
@@ -454,29 +460,42 @@ void one_over(double complex *a, double complex *x, long *carry,long radix, long
     long np = n/bsp_nprocs();
     setToHalf(x,n, radix); // set x to initial value 1/2
     double complex *xprev = vecallocc(np);
+    double complex *afft = vecallocc(np);
     bsp_push_reg(xprev,np*sizeof(double complex));
+    bsp_push_reg(afft,np*sizeof(double complex));
 
     //////////////////////////////////
     bsp_sync();
     //////////////////////////////////
 
+    copy(a,afft,n);
+    bspfft(afft,n,true,w,rho_np,rho_p);
+
     for (int i=0; i<M; i++){
         copy(x,xprev,n);
-        multiply(x,xprev,n,w,rho_np,rho_p, false);
+        // Calculate ax^2
+        square(x,n,w,rho_np,rho_p);
         set_half_zero(x,n);
         carry_add(x,carry,radix,n);
         carry_add(x,carry,radix,n);
-        multiply(x,a,n,w,rho_np,rho_p, false);
+        bspfft(x,n,true,w,rho_np,rho_p);
+        for (int i=0; i<np; i++){
+            x[i] =x[i]*afft[i];
+        }
+        bspfft(x,n,false,w,rho_np,rho_p);
         set_half_zero(x,n);
         carry_add(x,carry,radix,n);
         carry_add(x,carry,radix,n);
+        // The rest
         multiply_by_2(xprev,n);
         minus_2(xprev,x,n);
         set_half_zero(x,n);
         carry_add(x,carry,radix,n);
     }
     bsp_pop_reg(xprev);
+    bsp_pop_reg(afft);
     vecfreec(xprev);
+    vecfreec(afft);
 } /*end one_over*/
 
 void calculatepi(){
