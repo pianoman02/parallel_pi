@@ -1,5 +1,5 @@
 CC= bspcc
-CFLAGS= -std=c99 -Wall -O0 -g
+CFLAGS= -std=c99 -Wall -O3
 #Replace -O0 -g by -O3 for the final version.code
 LFLAGS= -lm
 

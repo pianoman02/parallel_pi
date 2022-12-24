@@ -669,8 +669,6 @@ void calculatepi(){
     bsp_pop_reg(&n);
     bsp_pop_reg(&decimalsPerRadix);
     bsp_pop_reg(&M);
-    
-    bsp_end();
 }
 /*
 void runone_over(){
